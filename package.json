@@ -1,6 +1,6 @@
 {
   "name": "mcp-magento-cloud",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server wrapping the magento-cloud CLI for database queries, logs, and environment management",
   "type": "module",
   "main": "dist/main.js",

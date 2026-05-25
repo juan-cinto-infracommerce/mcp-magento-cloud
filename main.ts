@@ -3,12 +3,27 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { execSync } from "child_process";
+import { homedir } from "os";
+import { join } from "path";
 import { validateQuery } from './validators.js';
 import { parseTsv } from './parsers.js';
 
+/**
+ * Build an env object that prepends ~/.magento-cloud/bin to PATH,
+ * so the CLI is found even when the MCP host doesn't inherit the
+ * user's shell profile.
+ */
+function execEnv(): NodeJS.ProcessEnv {
+  const magentoCloudBin = join(homedir(), ".magento-cloud", "bin");
+  return {
+    ...process.env,
+    PATH: `${magentoCloudBin}:${process.env.PATH ?? ""}`,
+  };
+}
+
 const server = new McpServer({
   name: "mcp-magento-cloud",
-  version: "1.0.0",
+  version: "1.0.1",
 });
 
 server.tool(
@@ -46,6 +61,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       return {
@@ -80,6 +96,7 @@ server.tool(
       const output = execSync("magento-cloud project:list --format tsv --no-header", {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       const projects = parseTsv(output, ["id", "title", "region"]);
@@ -120,6 +137,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       const environments = parseTsv(output, ["id", "title", "status", "type"]);
@@ -161,6 +179,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       const info = parseTsv(output, ["property", "value"]);
@@ -251,6 +270,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       return {
@@ -290,6 +310,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       return {
@@ -358,6 +379,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       const activities = parseTsv(output, ["id", "created", "description", "progress", "state", "result"]);
@@ -414,6 +436,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 120_000,
+        env: execEnv(),
       });
 
       return {
@@ -462,6 +485,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       return {
@@ -508,6 +532,7 @@ server.tool(
       const output = execSync(cmd, {
         encoding: "utf-8",
         timeout: 60_000,
+        env: execEnv(),
       });
 
       return {
