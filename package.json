@@ -1,0 +1,43 @@
+{
+  "name": "mcp-magento-cloud",
+  "version": "1.0.0",
+  "description": "MCP server wrapping the magento-cloud CLI for database queries, logs, and environment management",
+  "type": "module",
+  "main": "dist/main.js",
+  "bin": {
+    "mcp-magento-cloud": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "mcpName": "io.github.juan-cinto-infracommerce/magento-cloud",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juan-cinto-infracommerce/mcp-magento-cloud.git"
+  },
+  "keywords": [
+    "mcp",
+    "magento",
+    "adobe-commerce",
+    "magento-cloud",
+    "model-context-protocol"
+  ],
+  "author": "Juan Cinto",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "npx tsx main.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.25.20"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "^5.8.3"
+  }
+}

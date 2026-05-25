@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.juan-cinto-infracommerce/magento-cloud",
+  "title": "Magento Cloud MCP Server",
+  "description": "MCP server wrapping the magento-cloud CLI for database queries, logs, and environment management",
+  "repository": {
+    "url": "https://github.com/juan-cinto-infracommerce/mcp-magento-cloud",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mcp-magento-cloud",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
