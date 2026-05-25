@@ -17,7 +17,7 @@ In your `kilo.json` (project-level or `~/.config/kilo/kilo.json` for global):
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "magento-cloud": {
       "command": "npx",
       "args": ["-y", "mcp-magento-cloud"]
@@ -32,7 +32,7 @@ In `claude_desktop_config.json`:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "magento-cloud": {
       "command": "npx",
       "args": ["-y", "mcp-magento-cloud"]
