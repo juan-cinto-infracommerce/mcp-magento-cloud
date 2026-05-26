@@ -1,11 +1,12 @@
 {
   "name": "mcp-magento-cloud",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "MCP server for Adobe Commerce Cloud — uses REST API directly, no PHP CLI required for most tools",
   "type": "module",
   "main": "dist/main.js",
   "bin": {
-    "mcp-magento-cloud": "dist/main.js"
+    "mcp-magento-cloud": "dist/main.js",
+    "mcp-magento-cloud-login": "dist/login.js"
   },
   "files": [
     "dist",

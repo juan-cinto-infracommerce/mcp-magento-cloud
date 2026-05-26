@@ -2,12 +2,14 @@
 
 MCP (Model Context Protocol) server for Adobe Commerce Cloud. Allows AI agents to interact with Magento Cloud projects — query databases, read logs, list environments, inspect activities, and more.
 
+**No PHP CLI required** — uses the REST API and SSH directly.
+
 ## Versions
 
 | Version | Description | Requirements |
 |---------|-------------|--------------|
-| **v2.x** (latest) | Uses REST API + SSH directly. No PHP CLI needed. | Node.js 20+, API token, `ssh` binary |
-| **v1.x** | Wraps the `magento-cloud` PHP CLI. | Node.js 20+, `magento-cloud` CLI installed and authenticated |
+| **v2.x** (latest) | REST API + SSH directly. Browser login or API token. | Node.js 20+, `ssh` binary |
+| **v1.x** | Wraps the `magento-cloud` PHP CLI. | Node.js 20+, `magento-cloud` CLI installed |
 
 ### Using a specific version
 
@@ -22,20 +24,52 @@ npx -y mcp-magento-cloud@1.0.1
 ## Prerequisites (v2.x)
 
 - **Node.js 20+**
-- **Magento Cloud API token** — Create one at https://accounts.magento.cloud/user/api-tokens
-- **`ssh` binary** — Required for SSH-based tools (`execute_sql`, `get_environment_logs`, `get_environment_relationships`). Available by default on Linux/macOS.
+- **`ssh` binary** — Available by default on Linux/macOS
 
 ## Quick Start
 
-### 1. Get an API token
+### Authentication
 
-Go to https://accounts.magento.cloud/user/api-tokens and create a new token.
+You have two options to authenticate:
 
-### 2. Configure your MCP client
+#### Option A: Browser login (recommended)
+
+```bash
+npx mcp-magento-cloud-login
+```
+
+This opens your browser for OAuth2 login via your Adobe/Magento account. Credentials are stored locally in `~/.config/mcp-magento-cloud/credentials.json`. No need to create or manage API tokens.
+
+To logout:
+
+```bash
+npx mcp-magento-cloud-login logout
+```
+
+#### Option B: API token
+
+Create a token at https://accounts.magento.cloud/user/api-tokens and pass it as an environment variable (`MAGENTO_CLOUD_CLI_TOKEN`).
+
+> **Security note:** API tokens grant full access to all projects your account has access to. Treat them as sensitive secrets. If a token is compromised, revoke it immediately at the URL above.
+
+### Configure your MCP client
 
 #### Kilo
 
 In `~/.config/kilo/kilo.json`:
+
+```json
+{
+  "mcp": {
+    "magento-cloud": {
+      "type": "local",
+      "command": ["npx", "-y", "mcp-magento-cloud"]
+    }
+  }
+}
+```
+
+If using an API token instead of browser login, add the `environment` key:
 
 ```json
 {
@@ -60,10 +94,7 @@ In `claude_desktop_config.json`:
   "mcpServers": {
     "magento-cloud": {
       "command": "npx",
-      "args": ["-y", "mcp-magento-cloud"],
-      "env": {
-        "MAGENTO_CLOUD_CLI_TOKEN": "your-api-token-here"
-      }
+      "args": ["-y", "mcp-magento-cloud"]
     }
   }
 }
@@ -78,10 +109,7 @@ In `~/.gemini/settings.json`:
   "mcpServers": {
     "magento-cloud": {
       "command": "npx",
-      "args": ["-y", "mcp-magento-cloud"],
-      "env": {
-        "MAGENTO_CLOUD_CLI_TOKEN": "your-api-token-here"
-      }
+      "args": ["-y", "mcp-magento-cloud"]
     }
   }
 }
@@ -89,7 +117,7 @@ In `~/.gemini/settings.json`:
 
 ## Available Tools
 
-### REST API Tools (no CLI needed)
+### REST API Tools
 
 | Tool | Description |
 |------|-------------|
@@ -102,7 +130,7 @@ In `~/.gemini/settings.json`:
 | `list_variables` | List project or environment variables |
 | `list_services` | List services with versions and disk allocation |
 
-### SSH Tools (via SSH certificates, no CLI needed)
+### SSH Tools
 
 | Tool | Description |
 |------|-------------|
@@ -113,14 +141,20 @@ In `~/.gemini/settings.json`:
 
 ## Security
 
+- **Read-only** — no write/mutation commands are exposed
 - **SQL queries are validated** — only SELECT, SHOW, DESCRIBE, and EXPLAIN are allowed
-- SQL comments are stripped and multiple statements are blocked
+- SQL comments are stripped and multiple statements are blocked to prevent injection
 - SSH authentication uses temporary Ed25519 certificates signed by the Magento Cloud API
-- No write/mutation commands are exposed
+- Browser login stores refresh tokens locally with `0600` permissions
+- API tokens should be treated as sensitive secrets — they grant full access to all projects
 
 ## Testing with MCP Inspector
 
 ```bash
+# With browser login (run npx mcp-magento-cloud-login first)
+npx @modelcontextprotocol/inspector node dist/main.js
+
+# With API token
 MAGENTO_CLOUD_CLI_TOKEN=your-token npx @modelcontextprotocol/inspector node dist/main.js
 ```
 

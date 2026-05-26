@@ -1,10 +1,17 @@
 /**
  * Magento Cloud REST API client
  * Handles authentication and API calls directly without the PHP CLI
+ *
+ * Auth priority:
+ * 1. MAGENTO_CLOUD_CLI_ACCESS_TOKEN env var (direct access token)
+ * 2. MAGENTO_CLOUD_CLI_TOKEN env var (API token → exchanged for access token)
+ * 3. Stored credentials from `npx mcp-magento-cloud-login` (refresh token → access token)
  */
 
+import { readCredentials } from "./login.js";
+
 const API_BASE = "https://api.magento.cloud";
-const AUTH_URL = "https://auth.magento.cloud/oauth2/token";
+const TOKEN_URL = "https://auth.magento.cloud/oauth2/token";
 const CLIENT_ID = "magento-cloud-cli";
 
 interface TokenResponse {
@@ -17,28 +24,54 @@ interface TokenResponse {
 let cachedToken: { accessToken: string; expiresAt: number } | null = null;
 
 /**
- * Get the API token from environment variables
+ * Exchange an API token for a short-lived OAuth2 access token
  */
-function getApiToken(): string {
-  const token =
-    process.env.MAGENTO_CLOUD_CLI_TOKEN ||
-    process.env.MAGENTO_CLOUD_API_TOKEN;
+async function exchangeApiToken(apiToken: string): Promise<TokenResponse> {
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "api_token",
+      api_token: apiToken,
+      client_id: CLIENT_ID,
+    }),
+  });
 
-  if (!token) {
-    throw new Error(
-      "Missing API token. Set MAGENTO_CLOUD_CLI_TOKEN or MAGENTO_CLOUD_API_TOKEN environment variable. " +
-      "You can create an API token at https://accounts.magento.cloud/user/api-tokens"
-    );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`API token exchange failed (${response.status}): ${text}`);
   }
 
-  return token;
+  return (await response.json()) as TokenResponse;
 }
 
 /**
- * Exchange the API token for a short-lived OAuth2 access token
+ * Exchange a refresh token for a new access token
+ */
+async function exchangeRefreshToken(refreshToken: string): Promise<TokenResponse> {
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CLIENT_ID,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Refresh token exchange failed (${response.status}): ${text}`);
+  }
+
+  return (await response.json()) as TokenResponse;
+}
+
+/**
+ * Get a valid access token using the best available auth method
  */
 async function getAccessToken(): Promise<string> {
-  // Check for direct access token
+  // 1. Direct access token from env
   const directToken = process.env.MAGENTO_CLOUD_CLI_ACCESS_TOKEN;
   if (directToken) {
     return directToken;
@@ -49,33 +82,44 @@ async function getAccessToken(): Promise<string> {
     return cachedToken.accessToken;
   }
 
-  const apiToken = getApiToken();
-
-  const response = await fetch(AUTH_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      grant_type: "api_token",
-      api_token: apiToken,
-      client_id: CLIENT_ID,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Authentication failed (${response.status}): ${text}`);
+  // 2. API token from env
+  const apiToken = process.env.MAGENTO_CLOUD_CLI_TOKEN || process.env.MAGENTO_CLOUD_API_TOKEN;
+  if (apiToken) {
+    const data = await exchangeApiToken(apiToken);
+    cachedToken = {
+      accessToken: data.access_token,
+      expiresAt: Date.now() + data.expires_in * 1000,
+    };
+    return data.access_token;
   }
 
-  const data = (await response.json()) as TokenResponse;
+  // 3. Stored credentials from browser login
+  const credentials = readCredentials();
+  if (credentials?.refreshToken) {
+    // If we have a cached access token from credentials that's still valid
+    if (credentials.accessToken && credentials.expiresAt && Date.now() < credentials.expiresAt - 60_000) {
+      cachedToken = {
+        accessToken: credentials.accessToken,
+        expiresAt: credentials.expiresAt,
+      };
+      return credentials.accessToken;
+    }
 
-  cachedToken = {
-    accessToken: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
+    // Exchange refresh token for new access token
+    const data = await exchangeRefreshToken(credentials.refreshToken);
+    cachedToken = {
+      accessToken: data.access_token,
+      expiresAt: Date.now() + data.expires_in * 1000,
+    };
+    return data.access_token;
+  }
 
-  return data.access_token;
+  throw new Error(
+    "Not authenticated. Use one of these methods:\n" +
+    "  1. Run: npx mcp-magento-cloud-login (browser login, no token needed)\n" +
+    "  2. Set MAGENTO_CLOUD_CLI_TOKEN environment variable (API token)\n" +
+    "  3. Set MAGENTO_CLOUD_CLI_ACCESS_TOKEN environment variable (direct access token)"
+  );
 }
 
 /**
