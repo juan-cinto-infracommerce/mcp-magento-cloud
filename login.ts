@@ -64,7 +64,7 @@ function openBrowser(url: string): void {
   exec(`${cmd} "${url}"`);
 }
 
-async function login(): Promise<void> {
+export async function login(): Promise<void> {
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = base64url(randomBytes(16));

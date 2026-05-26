@@ -30,25 +30,19 @@ npx -y mcp-magento-cloud@1.0.1
 
 ### Authentication
 
-You have two options to authenticate:
+#### Automatic browser login (recommended)
 
-#### Option A: Browser login (recommended)
+No setup required. The first time you use any tool, a browser window will open automatically for OAuth2 login via your Adobe/Magento account. Credentials are stored locally in `~/.config/mcp-magento-cloud/credentials.json` and refreshed automatically.
 
-```bash
-npx mcp-magento-cloud-login
-```
-
-This opens your browser for OAuth2 login via your Adobe/Magento account. Credentials are stored locally in `~/.config/mcp-magento-cloud/credentials.json`. No need to create or manage API tokens.
-
-To logout:
+You can also login manually:
 
 ```bash
-npx mcp-magento-cloud-login logout
+npx -y -p mcp-magento-cloud mcp-magento-cloud-login
 ```
 
-#### Option B: API token
+#### API token (alternative)
 
-Create a token at https://accounts.magento.cloud/user/api-tokens and pass it as an environment variable (`MAGENTO_CLOUD_CLI_TOKEN`).
+If you prefer using an API token (e.g. for CI/CD), create one at https://accounts.magento.cloud/user/api-tokens and pass it as an environment variable (`MAGENTO_CLOUD_CLI_TOKEN`). When a token is set, browser login is skipped.
 
 > **Security note:** API tokens grant full access to all projects your account has access to. Treat them as sensitive secrets. If a token is compromised, revoke it immediately at the URL above.
 
@@ -151,10 +145,10 @@ In `~/.gemini/settings.json`:
 ## Testing with MCP Inspector
 
 ```bash
-# With browser login (run npx mcp-magento-cloud-login first)
+# Browser login will open automatically on first tool use
 npx @modelcontextprotocol/inspector node dist/main.js
 
-# With API token
+# Or with API token
 MAGENTO_CLOUD_CLI_TOKEN=your-token npx @modelcontextprotocol/inspector node dist/main.js
 ```
 

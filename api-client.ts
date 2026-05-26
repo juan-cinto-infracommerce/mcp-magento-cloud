@@ -8,7 +8,7 @@
  * 3. Stored credentials from `npx mcp-magento-cloud-login` (refresh token → access token)
  */
 
-import { readCredentials } from "./login.js";
+import { readCredentials, login } from "./login.js";
 
 const API_BASE = "https://api.magento.cloud";
 const TOKEN_URL = "https://auth.magento.cloud/oauth2/token";
@@ -114,19 +114,17 @@ async function getAccessToken(): Promise<string> {
       };
       return data.access_token;
     } catch {
-      throw new Error(
-        "Session expired. Please login again by running:\n" +
-        "  npx mcp-magento-cloud-login"
-      );
+      // Refresh token expired — trigger browser login
+      console.error("[mcp-magento-cloud] Session expired. Opening browser for login...");
+      await login();
+      return getAccessToken();
     }
   }
 
-  throw new Error(
-    "Not authenticated. Please login by running:\n" +
-    "  npx mcp-magento-cloud-login\n" +
-    "\n" +
-    "Or set MAGENTO_CLOUD_CLI_TOKEN environment variable with an API token."
-  );
+  // 4. No credentials at all — trigger browser login automatically
+  console.error("[mcp-magento-cloud] Not authenticated. Opening browser for login...");
+  await login();
+  return getAccessToken();
 }
 
 /**
