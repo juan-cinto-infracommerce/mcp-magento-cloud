@@ -212,21 +212,28 @@ async function login(): Promise<void> {
   });
 }
 
-// Run if called directly
-const args = process.argv.slice(2);
-if (args[0] === "login" || args.length === 0) {
-  login().catch((err) => {
-    console.error("Login failed:", err.message);
-    process.exit(1);
-  });
-} else if (args[0] === "logout") {
-  const path = getCredentialsPath();
-  if (existsSync(path)) {
-    writeFileSync(path, "", { mode: 0o600 });
-    console.log("Logged out. Credentials removed.");
+// Only run CLI when this file is the entrypoint (not when imported as a module)
+import { fileURLToPath } from "url";
+import { resolve } from "path";
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  const args = process.argv.slice(2);
+  if (args[0] === "login" || args.length === 0) {
+    login().catch((err) => {
+      console.error("Login failed:", err.message);
+      process.exit(1);
+    });
+  } else if (args[0] === "logout") {
+    const path = getCredentialsPath();
+    if (existsSync(path)) {
+      writeFileSync(path, "", { mode: 0o600 });
+      console.log("Logged out. Credentials removed.");
+    } else {
+      console.log("Not logged in.");
+    }
   } else {
-    console.log("Not logged in.");
+    console.log("Usage: mcp-magento-cloud-login [login|logout]");
   }
-} else {
-  console.log("Usage: mcp-magento-cloud-login [login|logout]");
 }
