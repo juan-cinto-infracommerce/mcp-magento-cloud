@@ -12,11 +12,14 @@ import {
   getActivityLog,
   listVariablesEnv,
   listVariablesProject,
+  createBranch,
+  getProjectGitUrl,
 } from "./api-client.js";
 import {
   getRelationshipsViaSsh,
   getLogViaSsh,
   execSqlViaSsh,
+  pushBranch,
 } from "./ssh-client.js";
 
 const server = new McpServer({
@@ -373,6 +376,68 @@ server.tool(
       const message = error instanceof Error ? error.message : String(error);
       return {
         content: [{ type: "text", text: `Error getting relationships:\n${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Write Tools ──────────────────────────────────────────────────
+
+server.tool(
+  "create_branch",
+  "Create a new environment branch from integration. The new branch will be a clone of the integration environment.",
+  {
+    project: z.string().describe("The Magento Cloud project ID"),
+    branch_name: z.string().describe("The branch name (ID) for the new environment, e.g. 'feature-xyz', 'bugfix-123'"),
+    title: z.string().optional().describe("Human-readable title for the branch. Defaults to the branch name if not provided."),
+  },
+  async ({ project, branch_name, title }) => {
+    try {
+      const result = await createBranch(project, branch_name, title || branch_name);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Branch '${branch_name}' created successfully from integration.\n\n${JSON.stringify(result, null, 2)}`,
+          },
+        ],
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `Error creating branch:\n${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+server.tool(
+  "push_branch",
+  "Push a local git branch to a Magento Cloud project. Uses SSH certificate authentication — no separate git credentials needed. The branch must exist locally.",
+  {
+    project: z.string().describe("The Magento Cloud project ID"),
+    repo_path: z.string().describe("Absolute path to the local git repository, e.g. '/home/user/myproject'"),
+    local_branch: z.string().describe("Local branch name to push, e.g. 'feature-xyz'"),
+    remote_branch: z.string().optional().describe("Remote branch name. Defaults to the same as local_branch."),
+  },
+  async ({ project, repo_path, local_branch, remote_branch }) => {
+    try {
+      const gitRemoteUrl = await getProjectGitUrl(project);
+      const output = await pushBranch(repo_path, gitRemoteUrl, local_branch, remote_branch);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Branch pushed successfully to Magento Cloud.\n\n${output}`,
+          },
+        ],
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `Error pushing branch:\n${message}` }],
         isError: true,
       };
     }

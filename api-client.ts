@@ -388,3 +388,40 @@ export async function listVariablesProject(projectId: string): Promise<Variable[
   const url = await projectUrl(projectId, `/variables`);
   return (await apiRequest(url)) as Variable[];
 }
+
+/** Create a new branch from the integration environment */
+export async function createBranch(
+  projectId: string,
+  branchId: string,
+  title: string
+): Promise<unknown> {
+  // Get the integration environment to find the #branch link
+  const url = await projectUrl(projectId, `/environments/integration`);
+  const env = (await apiRequest(url)) as { _links: Record<string, { href: string }> };
+
+  const branchLink = env._links?.["#branch"]?.href;
+  if (!branchLink) {
+    throw new Error("Branch operation not available on the integration environment.");
+  }
+
+  return apiRequest(branchLink, {
+    method: "POST",
+    body: JSON.stringify({ name: branchId, title }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Get the git remote URL for a project */
+export async function getProjectGitUrl(projectId: string): Promise<string> {
+  const url = await projectUrl(projectId);
+  const project = (await apiRequest(url)) as {
+    repository?: { url?: string };
+  };
+
+  const gitUrl = project.repository?.url;
+  if (!gitUrl) {
+    throw new Error(`No git URL found for project ${projectId}.`);
+  }
+
+  return gitUrl;
+}

@@ -22,7 +22,7 @@ let cachedCert: SshCertFiles | null = null;
 /**
  * Generate an Ed25519 key pair and get it signed by the Magento Cloud certifier API
  */
-async function getOrCreateSshCert(): Promise<SshCertFiles> {
+export async function getOrCreateSshCert(): Promise<SshCertFiles> {
   const sshDir = join(tmpdir(), "mcp-magento-cloud-ssh");
   mkdirSync(sshDir, { recursive: true });
 
@@ -191,4 +191,56 @@ export async function execSqlViaSsh(
     envId,
     `mysql --no-auto-rehash --user='${db.username}' --password='${db.password}' --host='${db.host}' --port='${db.port}' '${db.path}' --execute '${escapedQuery}'`
   );
+}
+
+/**
+ * Push a local branch to Magento Cloud using SSH certificate auth
+ * @param repoPath  Local git repository path
+ * @param gitRemoteUrl  Git remote URL, e.g. "yjh76o2xogaga@git.us-5.magento.cloud:yjh76o2xogaga.git"
+ * @param localBranch  Local branch to push (e.g. "feature-xyz")
+ * @param remoteBranch  Remote branch name (defaults to localBranch)
+ */
+export async function pushBranch(
+  repoPath: string,
+  gitRemoteUrl: string,
+  localBranch: string,
+  remoteBranch?: string
+): Promise<string> {
+  const cert = await getOrCreateSshCert();
+  const remote = remoteBranch || localBranch;
+
+  // Build GIT_SSH_COMMAND to use our certificate
+  const gitSshCommand = [
+    "ssh",
+    `-i ${cert.privateKey}`,
+    `-o CertificateFile=${cert.certificate}`,
+    `-o StrictHostKeyChecking=no`,
+    `-o BatchMode=yes`,
+  ].join(" ");
+
+  const result = spawnSync(
+    "git",
+    ["push", gitRemoteUrl, `${localBranch}:${remote}`],
+    {
+      encoding: "utf-8",
+      timeout: 120_000,
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GIT_SSH_COMMAND: gitSshCommand,
+      },
+    }
+  );
+
+  if (result.error) {
+    throw new Error(`Git push error: ${result.error.message}`);
+  }
+
+  const output = (result.stdout || "") + (result.stderr || "");
+
+  if (result.status !== 0) {
+    throw new Error(`Git push failed:\n${output}`);
+  }
+
+  return output || `Pushed ${localBranch} → ${remote} successfully.`;
 }
