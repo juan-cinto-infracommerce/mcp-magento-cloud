@@ -106,19 +106,26 @@ async function getAccessToken(): Promise<string> {
     }
 
     // Exchange refresh token for new access token
-    const data = await exchangeRefreshToken(credentials.refreshToken);
-    cachedToken = {
-      accessToken: data.access_token,
-      expiresAt: Date.now() + data.expires_in * 1000,
-    };
-    return data.access_token;
+    try {
+      const data = await exchangeRefreshToken(credentials.refreshToken);
+      cachedToken = {
+        accessToken: data.access_token,
+        expiresAt: Date.now() + data.expires_in * 1000,
+      };
+      return data.access_token;
+    } catch {
+      throw new Error(
+        "Session expired. Please login again by running:\n" +
+        "  npx mcp-magento-cloud-login"
+      );
+    }
   }
 
   throw new Error(
-    "Not authenticated. Use one of these methods:\n" +
-    "  1. Run: npx mcp-magento-cloud-login (browser login, no token needed)\n" +
-    "  2. Set MAGENTO_CLOUD_CLI_TOKEN environment variable (API token)\n" +
-    "  3. Set MAGENTO_CLOUD_CLI_ACCESS_TOKEN environment variable (direct access token)"
+    "Not authenticated. Please login by running:\n" +
+    "  npx mcp-magento-cloud-login\n" +
+    "\n" +
+    "Or set MAGENTO_CLOUD_CLI_TOKEN environment variable with an API token."
   );
 }
 
