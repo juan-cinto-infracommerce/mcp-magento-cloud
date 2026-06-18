@@ -8,7 +8,7 @@
  * 3. Stored credentials from `npx mcp-magento-cloud-login` (refresh token → access token)
  */
 
-import { readCredentials, login } from "./login.js";
+import { readCredentials, saveCredentials, login } from "./login.js";
 
 const API_BASE = "https://api.magento.cloud";
 const TOKEN_URL = "https://auth.magento.cloud/oauth2/token";
@@ -68,19 +68,26 @@ async function exchangeRefreshToken(refreshToken: string): Promise<TokenResponse
 }
 
 /**
- * Get a valid access token using the best available auth method
+ * Get a valid access token using the best available auth method.
+ *
+ * When `forceRefresh` is true, every cache short-circuit is skipped — both the
+ * in-memory `cachedToken` and the `credentials.accessToken` stored on disk — so
+ * a token that the API has already revoked is never handed back. This is what an
+ * authenticated request calls after it sees a 401.
  */
-async function getAccessToken(): Promise<string> {
-  // 1. Direct access token from env
+async function getAccessToken(forceRefresh = false): Promise<string> {
+  // 1. Direct access token from env (nothing we can refresh here)
   const directToken = process.env.MAGENTO_CLOUD_CLI_ACCESS_TOKEN;
   if (directToken) {
     return directToken;
   }
 
   // Return cached token if still valid (with 60s buffer)
-  if (cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
+  if (!forceRefresh && cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
     return cachedToken.accessToken;
   }
+  // Drop the (possibly revoked) cached token before re-deriving one
+  if (forceRefresh) cachedToken = null;
 
   // 2. API token from env
   const apiToken = process.env.MAGENTO_CLOUD_CLI_TOKEN || process.env.MAGENTO_CLOUD_API_TOKEN;
@@ -96,8 +103,14 @@ async function getAccessToken(): Promise<string> {
   // 3. Stored credentials from browser login
   const credentials = readCredentials();
   if (credentials?.refreshToken) {
-    // If we have a cached access token from credentials that's still valid
-    if (credentials.accessToken && credentials.expiresAt && Date.now() < credentials.expiresAt - 60_000) {
+    // Reuse the stored access token only when we're NOT forcing a refresh —
+    // otherwise we'd hand back the same revoked token that triggered the 401.
+    if (
+      !forceRefresh &&
+      credentials.accessToken &&
+      credentials.expiresAt &&
+      Date.now() < credentials.expiresAt - 60_000
+    ) {
       cachedToken = {
         accessToken: credentials.accessToken,
         expiresAt: credentials.expiresAt,
@@ -108,23 +121,48 @@ async function getAccessToken(): Promise<string> {
     // Exchange refresh token for new access token
     try {
       const data = await exchangeRefreshToken(credentials.refreshToken);
-      cachedToken = {
+      const expiresAt = Date.now() + data.expires_in * 1000;
+      cachedToken = { accessToken: data.access_token, expiresAt };
+      // Persist the new access token (and a rotated refresh token, if Adobe
+      // returned one) so a process restart picks up fresh credentials too.
+      saveCredentials({
+        refreshToken: data.refresh_token || credentials.refreshToken,
         accessToken: data.access_token,
-        expiresAt: Date.now() + data.expires_in * 1000,
-      };
+        expiresAt,
+      });
       return data.access_token;
     } catch {
       // Refresh token expired — trigger browser login
       console.error("[mcp-magento-cloud] Session expired. Opening browser for login...");
       await login();
-      return getAccessToken();
+      return getAccessToken(true);
     }
   }
 
   // 4. No credentials at all — trigger browser login automatically
   console.error("[mcp-magento-cloud] Not authenticated. Opening browser for login...");
   await login();
-  return getAccessToken();
+  return getAccessToken(true);
+}
+
+/**
+ * Perform an authenticated fetch, transparently recovering from a revoked token.
+ *
+ * If the first attempt returns 401, the cached token is dropped, a fresh one is
+ * obtained with forceRefresh=true, and the request is retried exactly once. This
+ * is what lets the server recover from a poisoned token without an MCP reconnect.
+ */
+async function authedFetch(url: string, init: RequestInit, headers: Record<string, string>): Promise<Response> {
+  let token = await getAccessToken();
+  let res = await fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${token}` } });
+
+  if (res.status === 401) {
+    cachedToken = null;
+    token = await getAccessToken(true);
+    res = await fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${token}` } });
+  }
+
+  return res;
 }
 
 /**
@@ -134,8 +172,6 @@ export async function apiRequest(
   path: string,
   options: { method?: string; params?: Record<string, string>; body?: string; headers?: Record<string, string> } = {}
 ): Promise<unknown> {
-  const token = await getAccessToken();
-
   let url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
   if (options.params) {
@@ -143,16 +179,18 @@ export async function apiRequest(
     url += `?${searchParams.toString()}`;
   }
 
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
+  const response = await authedFetch(
+    url,
+    {
+      method: options.method || "GET",
+      ...(options.body ? { body: options.body } : {}),
+    },
+    {
       Accept: "application/json",
       "User-Agent": "mcp-magento-cloud/2.0.0",
       ...(options.headers || {}),
-    },
-    ...(options.body ? { body: options.body } : {}),
-  });
+    }
+  );
 
   if (!response.ok) {
     const text = await response.text();
@@ -169,8 +207,6 @@ export async function apiRequestText(
   path: string,
   options: { method?: string; params?: Record<string, string> } = {}
 ): Promise<string> {
-  const token = await getAccessToken();
-
   let url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
   if (options.params) {
@@ -178,13 +214,11 @@ export async function apiRequestText(
     url += `?${searchParams.toString()}`;
   }
 
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "User-Agent": "mcp-magento-cloud/2.0.0",
-    },
-  });
+  const response = await authedFetch(
+    url,
+    { method: options.method || "GET" },
+    { "User-Agent": "mcp-magento-cloud/2.0.0" }
+  );
 
   if (!response.ok) {
     const text = await response.text();

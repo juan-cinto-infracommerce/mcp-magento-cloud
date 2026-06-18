@@ -35,7 +35,7 @@ export function readCredentials(): { refreshToken: string; accessToken?: string;
 }
 
 /** Save credentials to disk */
-function saveCredentials(data: { refreshToken: string; accessToken?: string; expiresAt?: number }): void {
+export function saveCredentials(data: { refreshToken: string; accessToken?: string; expiresAt?: number }): void {
   const path = getCredentialsPath();
   writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
