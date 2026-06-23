@@ -194,6 +194,51 @@ export async function execSqlViaSsh(
 }
 
 /**
+ * Quote a string for safe use as a single argument in a POSIX shell.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Run `bin/magento config:set` on a remote Magento Cloud environment via SSH.
+ *
+ * @param projectId  The Magento Cloud project ID
+ * @param envId      The environment name
+ * @param path       The config path, e.g. "web/secure/base_url"
+ * @param value      The value to set
+ * @param options    Optional scope/scope-code and lock/encrypt flags
+ */
+export async function setConfigViaSsh(
+  projectId: string,
+  envId: string,
+  path: string,
+  value: string,
+  options: {
+    scope?: string;
+    scopeCode?: string;
+    encrypted?: boolean;
+  } = {}
+): Promise<string> {
+  const args = ["php bin/magento config:set"];
+
+  if (options.scope) {
+    args.push(`--scope=${shellQuote(options.scope)}`);
+  }
+  if (options.scopeCode) {
+    args.push(`--scope-code=${shellQuote(options.scopeCode)}`);
+  }
+  if (options.encrypted) {
+    args.push("--encrypted");
+  }
+
+  args.push(shellQuote(path));
+  args.push(shellQuote(value));
+
+  return sshExec(projectId, envId, args.join(" "));
+}
+
+/**
  * Push a local branch to Magento Cloud using SSH certificate auth
  * @param repoPath  Local git repository path
  * @param gitRemoteUrl  Git remote URL, e.g. "yjh76o2xogaga@git.us-5.magento.cloud:yjh76o2xogaga.git"

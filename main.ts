@@ -19,6 +19,7 @@ import {
   getRelationshipsViaSsh,
   getLogViaSsh,
   execSqlViaSsh,
+  setConfigViaSsh,
   pushBranch,
 } from "./ssh-client.js";
 
@@ -383,6 +384,55 @@ server.tool(
 );
 
 // ─── Write Tools ──────────────────────────────────────────────────
+
+server.tool(
+  "set_cloud_config",
+  "Set a Magento configuration value on a Cloud environment by running `bin/magento config:set` via SSH. Use the scope/scope_code parameters to target a specific website or store view.",
+  {
+    project: z.string().describe("The Magento Cloud project ID"),
+    environment: z.string().describe("The environment name, e.g. 'staging', 'integration'"),
+    path: z.string().describe("The configuration path, e.g. 'web/secure/base_url' or 'general/store_information/name'"),
+    value: z.string().describe("The value to set for the configuration path"),
+    scope: z.enum(["default", "websites", "stores"]).optional().describe("The configuration scope. Defaults to 'default' (global) if omitted."),
+    scope_code: z.string().optional().describe("The website code or store view code the scope applies to, e.g. 'base' or 'default'. Required when scope is 'websites' or 'stores'."),
+    encrypted: z.boolean().optional().describe("Encrypt the value before saving (for sensitive data like API keys)."),
+  },
+  async ({ project, environment, path, value, scope, scope_code, encrypted }) => {
+    if (environment.toLowerCase() === "production") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Refusing to set configuration on the production environment. Changing config on production must be done manually by an authorized operator — do not attempt it through this tool.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      const output = await setConfigViaSsh(project, environment, path, value, {
+        scope,
+        scopeCode: scope_code,
+        encrypted,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Config '${path}' set successfully on ${environment}.\n\n${output}`,
+          },
+        ],
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `Error setting config:\n${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
 
 server.tool(
   "create_branch",

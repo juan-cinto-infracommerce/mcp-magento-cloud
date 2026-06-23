@@ -133,11 +133,19 @@ In `~/.gemini/settings.json`:
 | `get_environment_relationships` | Get service connection details (host, port, credentials) |
 | `list_log_types` | List available log types |
 
+### Write Tools
+
+| Tool | Description |
+|------|-------------|
+| `set_cloud_config` | Set a Magento config value via `bin/magento config:set` over SSH (supports scope/scope_code and encrypted values). Blocked on the `production` environment. |
+| `create_branch` | Create a new environment branch cloned from integration |
+| `push_branch` | Push a local git branch to the project using SSH certificate auth |
+
 ## Security
 
-- **Read-only** — no write/mutation commands are exposed
 - **SQL queries are validated** — only SELECT, SHOW, DESCRIBE, and EXPLAIN are allowed
 - SQL comments are stripped and multiple statements are blocked to prevent injection
+- **Production is protected** — `set_cloud_config` refuses to run against the `production` environment; such changes must be made manually
 - SSH authentication uses temporary Ed25519 certificates signed by the Magento Cloud API
 - Browser login stores refresh tokens locally with `0600` permissions
 - API tokens should be treated as sensitive secrets — they grant full access to all projects
