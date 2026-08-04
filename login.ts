@@ -6,8 +6,8 @@
 
 import { createServer } from "http";
 import { randomBytes, createHash } from "crypto";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
-import { join } from "path";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from "fs";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import { exec } from "child_process";
 
@@ -210,6 +210,88 @@ export async function login(): Promise<void> {
       reject(new Error("Login timed out"));
     }, 300_000);
   });
+}
+
+// --- Exclusive (single-browser) login ---
+
+/** How long a login lock is honoured before it is treated as abandoned. */
+const LOGIN_LOCK_TTL = 320_000; // login() itself times out at 5 min
+const LOGIN_LOCK_POLL = 500;
+
+function loginLockPath(): string {
+  return join(dirname(getCredentialsPath()), "login.lock");
+}
+
+/** True when the stored credentials contain a usable, unexpired access token. */
+function credentialsAreUsable(): boolean {
+  const c = readCredentials();
+  return Boolean(c?.refreshToken && c.accessToken && c.expiresAt && Date.now() < c.expiresAt - 60_000);
+}
+
+/** Try to claim the lock atomically; takes over a lock left behind by a dead process. */
+function claimLoginLock(): boolean {
+  const path = loginLockPath();
+  try {
+    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+    return true;
+  } catch {
+    // Lock exists — steal it only if it is older than a full login attempt,
+    // which means the holder crashed without cleaning up.
+    try {
+      if (Date.now() - statSync(path).mtimeMs > LOGIN_LOCK_TTL) {
+        writeFileSync(path, String(process.pid), { mode: 0o600 });
+        return true;
+      }
+    } catch {
+      // Lock vanished between the two calls — let the caller retry as a waiter.
+    }
+    return false;
+  }
+}
+
+/**
+ * Run an interactive login, but only ever one at a time across every process
+ * sharing this credentials file.
+ *
+ * Without this, two tool calls that both need a token each spawn their own OAuth
+ * server and browser tab: the user can only complete one, so the other blocks
+ * until its 5-minute timeout — the MCP call just appears to hang.
+ *
+ * A caller that loses the race waits for the winner's credentials instead of
+ * starting a competing flow.
+ */
+export async function loginExclusive(): Promise<void> {
+  if (credentialsAreUsable()) return;
+
+  if (claimLoginLock()) {
+    return runLoginAndReleaseLock();
+  }
+
+  // Another process holds the lock. Wait for its credentials instead of opening
+  // a competing browser tab.
+  const deadline = Date.now() + LOGIN_LOCK_TTL;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, LOGIN_LOCK_POLL));
+    if (credentialsAreUsable()) return;
+    // Holder released the lock without producing credentials (cancelled, crashed)
+    // — take over and do the login ourselves.
+    if (!existsSync(loginLockPath()) && claimLoginLock()) {
+      return runLoginAndReleaseLock();
+    }
+  }
+
+  throw new Error(
+    "Another Magento Cloud login is already in progress and never completed. " +
+      "Finish it in the browser, or run `npx mcp-magento-cloud-login` manually."
+  );
+}
+
+async function runLoginAndReleaseLock(): Promise<void> {
+  try {
+    await login();
+  } finally {
+    rmSync(loginLockPath(), { force: true });
+  }
 }
 
 // Only run CLI when this file is the entrypoint (not when imported as a module)

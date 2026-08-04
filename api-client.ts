@@ -8,7 +8,7 @@
  * 3. Stored credentials from `npx mcp-magento-cloud-login` (refresh token → access token)
  */
 
-import { readCredentials, saveCredentials, login } from "./login.js";
+import { readCredentials, saveCredentials, loginExclusive } from "./login.js";
 
 const API_BASE = "https://api.magento.cloud";
 const TOKEN_URL = "https://auth.magento.cloud/oauth2/token";
@@ -21,7 +21,27 @@ interface TokenResponse {
   refresh_token?: string;
 }
 
-let cachedToken: { accessToken: string; expiresAt: number } | null = null;
+interface CachedToken {
+  accessToken: string;
+  expiresAt: number;
+  /** Bumped every time a new token is stored, so a 401 can be attributed to a token. */
+  generation: number;
+}
+
+let cachedToken: CachedToken | null = null;
+let generation = 0;
+
+/**
+ * The refresh currently in progress, shared by every concurrent caller.
+ *
+ * Adobe's access tokens live 15 minutes, so parallel tool calls routinely need a
+ * new token at the same moment. Letting each one redeem the refresh token
+ * independently means the auth server sees duplicate grants for the same code and
+ * rejects all but one; the losers then fall through to an interactive login and
+ * the tool call appears to hang. One shared refresh removes the race entirely.
+ */
+let refreshInFlight: Promise<CachedToken> | null = null;
+let refreshInFlightIgnoresStored = false;
 
 /**
  * Exchange an API token for a short-lived OAuth2 access token
@@ -67,102 +87,146 @@ async function exchangeRefreshToken(refreshToken: string): Promise<TokenResponse
   return (await response.json()) as TokenResponse;
 }
 
+/** Store a freshly issued token and persist it, keeping a rotated refresh token. */
+function storeToken(data: TokenResponse, previousRefreshToken?: string): CachedToken {
+  const expiresAt = Date.now() + data.expires_in * 1000;
+  cachedToken = { accessToken: data.access_token, expiresAt, generation: ++generation };
+
+  // Persist the new access token (and a rotated refresh token, if Adobe returned
+  // one) so a process restart picks up fresh credentials too.
+  const refreshToken = data.refresh_token || previousRefreshToken;
+  if (refreshToken) {
+    saveCredentials({ refreshToken, accessToken: data.access_token, expiresAt });
+  }
+
+  return cachedToken;
+}
+
+/** A cached or stored token counts as usable until 60s before it expires. */
+function isUsable(token: { expiresAt?: number } | null | undefined): boolean {
+  return Boolean(token?.expiresAt && Date.now() < token.expiresAt - 60_000);
+}
+
 /**
- * Get a valid access token using the best available auth method.
+ * Derive a new token from whatever auth material is available.
  *
- * When `forceRefresh` is true, every cache short-circuit is skipped — both the
- * in-memory `cachedToken` and the `credentials.accessToken` stored on disk — so
- * a token that the API has already revoked is never handed back. This is what an
- * authenticated request calls after it sees a 401.
+ * `ignoreStoredAccessToken` is set when recovering from a 401: the token on disk
+ * is the one the API just rejected, so it must not be handed back.
+ * Only ever called through `getToken()`, which serialises concurrent callers.
  */
-async function getAccessToken(forceRefresh = false): Promise<string> {
-  // 1. Direct access token from env (nothing we can refresh here)
-  const directToken = process.env.MAGENTO_CLOUD_CLI_ACCESS_TOKEN;
-  if (directToken) {
-    return directToken;
-  }
-
-  // Return cached token if still valid (with 60s buffer)
-  if (!forceRefresh && cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
-    return cachedToken.accessToken;
-  }
-  // Drop the (possibly revoked) cached token before re-deriving one
-  if (forceRefresh) cachedToken = null;
-
-  // 2. API token from env
+async function deriveToken(ignoreStoredAccessToken: boolean): Promise<CachedToken> {
+  // 1. API token from env
   const apiToken = process.env.MAGENTO_CLOUD_CLI_TOKEN || process.env.MAGENTO_CLOUD_API_TOKEN;
   if (apiToken) {
-    const data = await exchangeApiToken(apiToken);
-    cachedToken = {
-      accessToken: data.access_token,
-      expiresAt: Date.now() + data.expires_in * 1000,
-    };
-    return data.access_token;
+    return storeToken(await exchangeApiToken(apiToken));
   }
 
-  // 3. Stored credentials from browser login
+  // 2. Stored credentials from browser login
   const credentials = readCredentials();
   if (credentials?.refreshToken) {
-    // Reuse the stored access token only when we're NOT forcing a refresh —
-    // otherwise we'd hand back the same revoked token that triggered the 401.
-    if (
-      !forceRefresh &&
-      credentials.accessToken &&
-      credentials.expiresAt &&
-      Date.now() < credentials.expiresAt - 60_000
-    ) {
+    // Another process may have refreshed while we were waiting — reuse its token.
+    if (!ignoreStoredAccessToken && credentials.accessToken && isUsable(credentials)) {
       cachedToken = {
         accessToken: credentials.accessToken,
-        expiresAt: credentials.expiresAt,
+        expiresAt: credentials.expiresAt!,
+        generation: ++generation,
       };
-      return credentials.accessToken;
+      return cachedToken;
     }
 
-    // Exchange refresh token for new access token
     try {
-      const data = await exchangeRefreshToken(credentials.refreshToken);
-      const expiresAt = Date.now() + data.expires_in * 1000;
-      cachedToken = { accessToken: data.access_token, expiresAt };
-      // Persist the new access token (and a rotated refresh token, if Adobe
-      // returned one) so a process restart picks up fresh credentials too.
-      saveCredentials({
-        refreshToken: data.refresh_token || credentials.refreshToken,
-        accessToken: data.access_token,
-        expiresAt,
-      });
-      return data.access_token;
-    } catch {
-      // Refresh token expired — trigger browser login
+      return storeToken(await exchangeRefreshToken(credentials.refreshToken), credentials.refreshToken);
+    } catch (err) {
+      // The refresh token may have been rotated on disk by another process since
+      // we read it. Re-read and retry once before assuming the session is dead.
+      const latest = readCredentials();
+      if (latest?.refreshToken && latest.refreshToken !== credentials.refreshToken) {
+        return storeToken(await exchangeRefreshToken(latest.refreshToken), latest.refreshToken);
+      }
       console.error("[mcp-magento-cloud] Session expired. Opening browser for login...");
-      await login();
-      return getAccessToken(true);
     }
+  } else {
+    console.error("[mcp-magento-cloud] Not authenticated. Opening browser for login...");
   }
 
-  // 4. No credentials at all — trigger browser login automatically
-  console.error("[mcp-magento-cloud] Not authenticated. Opening browser for login...");
-  await login();
-  return getAccessToken(true);
+  // 3. No usable credentials — interactive login (at most one browser at a time)
+  await loginExclusive();
+
+  const fresh = readCredentials();
+  if (!fresh?.refreshToken) {
+    throw new Error("Login completed without storing credentials. Run `npx mcp-magento-cloud-login`.");
+  }
+  if (fresh.accessToken && isUsable(fresh)) {
+    cachedToken = {
+      accessToken: fresh.accessToken,
+      expiresAt: fresh.expiresAt!,
+      generation: ++generation,
+    };
+    return cachedToken;
+  }
+  return storeToken(await exchangeRefreshToken(fresh.refreshToken), fresh.refreshToken);
+}
+
+/**
+ * Get a usable access token, coalescing concurrent callers onto one refresh.
+ */
+async function getToken(ignoreStoredAccessToken = false): Promise<CachedToken> {
+  if (!ignoreStoredAccessToken && isUsable(cachedToken)) {
+    return cachedToken!;
+  }
+
+  // A forced refresh must not piggyback on a non-forced one: that one is allowed
+  // to return the token stored on disk, which is the very token the API rejected.
+  while (ignoreStoredAccessToken && refreshInFlight && !refreshInFlightIgnoresStored) {
+    await refreshInFlight.catch(() => undefined);
+  }
+
+  if (!refreshInFlight) {
+    refreshInFlightIgnoresStored = ignoreStoredAccessToken;
+    refreshInFlight = deriveToken(ignoreStoredAccessToken).finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+/**
+ * Replace a token the API rejected with a 401.
+ *
+ * If another caller already replaced it (higher generation), that newer token is
+ * used as-is — a burst of parallel 401s triggers exactly one refresh, not one per
+ * request.
+ */
+async function refreshAfter401(rejected: CachedToken): Promise<CachedToken> {
+  if (cachedToken && cachedToken.generation !== rejected.generation) {
+    return cachedToken;
+  }
+  cachedToken = null;
+  return getToken(true);
 }
 
 /**
  * Perform an authenticated fetch, transparently recovering from a revoked token.
  *
- * If the first attempt returns 401, the cached token is dropped, a fresh one is
- * obtained with forceRefresh=true, and the request is retried exactly once. This
- * is what lets the server recover from a poisoned token without an MCP reconnect.
+ * If the first attempt returns 401, the token is invalidated, a fresh one is
+ * obtained and the request is retried exactly once. This is what lets the server
+ * recover from a poisoned token without an MCP reconnect.
  */
 async function authedFetch(url: string, init: RequestInit, headers: Record<string, string>): Promise<Response> {
-  let token = await getAccessToken();
-  let res = await fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${token}` } });
-
-  if (res.status === 401) {
-    cachedToken = null;
-    token = await getAccessToken(true);
-    res = await fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${token}` } });
+  // A directly supplied access token is all we have — nothing to refresh from.
+  const directToken = process.env.MAGENTO_CLOUD_CLI_ACCESS_TOKEN;
+  if (directToken) {
+    return fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${directToken}` } });
   }
 
-  return res;
+  const token = await getToken();
+  const res = await fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${token.accessToken}` } });
+  if (res.status !== 401) {
+    return res;
+  }
+
+  const retryToken = await refreshAfter401(token);
+  return fetch(url, { ...init, headers: { ...headers, Authorization: `Bearer ${retryToken.accessToken}` } });
 }
 
 /**
