@@ -89,7 +89,11 @@ export async function login(): Promise<void> {
   // redirect_uri must be the root URL without path — Magento Cloud OAuth only allows this format
   const redirectUri = `http://127.0.0.1:${port}`;
 
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<void>((resolveLogin, rejectLogin) => {
+    // Settle once and stop the timeout, so a finished login doesn't log a bogus timeout later.
+    const resolve = () => { clearTimeout(timeout); resolveLogin(); };
+    const reject = (err: unknown) => { clearTimeout(timeout); rejectLogin(err); };
+
     const server = createServer(async (req, res) => {
       const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
 
@@ -204,10 +208,10 @@ export async function login(): Promise<void> {
     });
 
     // Timeout after 5 minutes
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       console.error("\nLogin timed out after 5 minutes.");
       server.close();
-      reject(new Error("Login timed out"));
+      rejectLogin(new Error("Login timed out"));
     }, 300_000);
   });
 }
@@ -228,6 +232,19 @@ function credentialsAreUsable(): boolean {
   return Boolean(c?.refreshToken && c.accessToken && c.expiresAt && Date.now() < c.expiresAt - 60_000);
 }
 
+/** True when the process that wrote the lock is still running on this machine. */
+function lockHolderAlive(path: string): boolean {
+  try {
+    const pid = Number(readFileSync(path, "utf-8").trim());
+    if (!pid) return false;
+    process.kill(pid, 0); // signal 0 = existence check only
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but belongs to someone else.
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
 /** Try to claim the lock atomically; takes over a lock left behind by a dead process. */
 function claimLoginLock(): boolean {
   const path = loginLockPath();
@@ -235,15 +252,16 @@ function claimLoginLock(): boolean {
     writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
     return true;
   } catch {
-    // Lock exists — steal it only if it is older than a full login attempt,
-    // which means the holder crashed without cleaning up.
+    // Lock exists — steal it only if its holder is gone (agent closed or crashed
+    // mid-login) or it is older than a full login attempt.
     try {
-      if (Date.now() - statSync(path).mtimeMs > LOGIN_LOCK_TTL) {
-        writeFileSync(path, String(process.pid), { mode: 0o600 });
+      if (!lockHolderAlive(path) || Date.now() - statSync(path).mtimeMs > LOGIN_LOCK_TTL) {
+        rmSync(path, { force: true });
+        writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
         return true;
       }
     } catch {
-      // Lock vanished between the two calls — let the caller retry as a waiter.
+      // Lost the takeover race or the lock vanished — let the caller retry as a waiter.
     }
     return false;
   }
@@ -273,9 +291,9 @@ export async function loginExclusive(): Promise<void> {
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, LOGIN_LOCK_POLL));
     if (credentialsAreUsable()) return;
-    // Holder released the lock without producing credentials (cancelled, crashed)
+    // Holder released the lock without producing credentials, or died holding it
     // — take over and do the login ourselves.
-    if (!existsSync(loginLockPath()) && claimLoginLock()) {
+    if (claimLoginLock()) {
       return runLoginAndReleaseLock();
     }
   }
